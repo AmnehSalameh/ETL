@@ -1,0 +1,4 @@
+logs
+dags/w3c
+.venv
+.DS_Store
