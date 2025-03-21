@@ -1,15 +1,11 @@
 import datetime as dt
-import requests
 import os
-from datetime import datetime
-import requests.exceptions as requests_exceptions
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
-import json
+
 import logging  # Import the logging module
-import re
-from db_operations import insert_ip_details
+from make_dimension import makeDateDimension, makeTimeDimension, makeUserAgentDimension, makeLocationDimension
 
 # define (local) folders where files will be found / copied / staged / written
 WorkingDirectory = "/opt/airflow/dags/w3c"
@@ -19,11 +15,12 @@ StarSchema = WorkingDirectory + "/StarSchema/"
 
 # Create a String for a BASH command that will extract / sort unique IP 
 # addresses from one file, copying them over into another file
-uniqIPsCommand = "sort -u " + StagingArea + "RawIPAddresses.txt > " + StagingArea + "UniqueIPAddresses.txt"
+uniqueIPsCommand = "sort -u " + StagingArea + "RawIPAddresses.txt > " + StagingArea + "UniqueIPAddresses.txt"
 
 # Another BASH command, this time to extract unique Date values from one file into another
-uniqDatesCommand = "sort -u " + StagingArea + "RawDates.txt > " + StagingArea + "UniqueDates.txt"
+uniqueDatesCommand = "sort -u " + StagingArea + "RawDates.txt > " + StagingArea + "UniqueDates.txt"
 
+uniqueUserAgentCommand = "sort -u " + StarSchema + "DimUserAgentTable.txt > " + StarSchema + "DimUniqueUserAgentTable.txt"
 # Another BASH command, this time to copy the Fact Table that is produced from the Staging area to the resultant folder
 #copyFactTableCommand = "cp " + StagingArea + "FactTable.txt " + StarSchema + "FactTable.txt"
 
@@ -143,8 +140,10 @@ def CleanLine(indices_to_remove,line, expected_columns):
 # with 'write' mode instead of 'append' mode will effectively truncate
 # its content to zero
 def EmptyOutputFilesInStagingArea():
-    OutputFile14Col = open(StagingArea + 'OutputFor14ColData.txt', 'w')
-    OutputFile18Col = open(StagingArea + 'OutputFor18ColData.txt', 'w')
+    open(StagingArea + 'OutputFor14ColData.txt', 'w')
+    open(StagingArea + 'OutputFor18ColData.txt', 'w')
+    open(StagingArea + 'FactTableFor14.txt', 'w')
+    open(StagingArea + 'FactTableFor18.txt', 'w')
 
 # copy (the content of) all log files into the staging area
 def CopyLogFilesToStagingArea():
@@ -175,7 +174,7 @@ def Add14ColDataToFactTable():
     OutFact1 = open(StagingArea + 'FactTableFor14.txt', 'a')
     # write header row into the fact table
   
-    OutFact1.write("Date,Time,cs-uri-stem,IP,Browser,sc-status,ResponseTime")
+    OutFact1.write("Date,Time,cs-uri-stem,IP,Browser,sc-status,ResponseTime\n")
 
     # read in all lines of data from input file (14-col data)
     Lines= InFile.readlines()
@@ -183,18 +182,14 @@ def Add14ColDataToFactTable():
     # for each line in the input file
     for line in Lines:
         # split line into columns
-        Split=line.split(" ")
+        Split=line.strip().split(" ")
 
         # among other things, the line of data has the following: Date,Time,Browser,IP,ResponseTime
         # do some reformatting of the browser field if required, to remove ',' chars from it
         browser = Split[4].replace(",","")
 
         # create line of text to write to output file, made up of the following: Date,Time,Browser,IP,ResponseTime
-        OutputLine =Split[0] + "," + Split[1] +  "," + Split[2] +  "," + Split[3] + "," + browser + "," + Split[5] + "," + Split[6]
-
-#TODO: 2.	Transform: Converting, processing, and aggregating that data into a
-#unified form that is relevant to our business analytical needs
-#Transformation: changing the type or structure
+        OutputLine =Split[0] + "," + Split[1] +  "," + Split[2] +  "," + Split[3] + "," + browser + "," + Split[5] + "," + Split[6] + "\n"
 
         # write line of text to output file
         OutFact1.write(OutputLine)
@@ -206,7 +201,7 @@ def Add18ColDataToFactTable():
 
     # open Fact table to write / append into
     OutFact2 = open(StagingArea + 'FactTableFor18.txt', 'a')
-    OutFact2.write("Date,Time,cs-uri-stem,IP,Browser,cs(Cookie),cs(Referer),sc-status,sc-bytes,cs-bytes,ResponseTime")
+    OutFact2.write("Date,Time,Uri-stem,IP,Browser,Status,ResponseTime,Cookie,Referrer,Sc-bytes,Cs-bytes\n")
 
     # read in all lines of data from input file (18-col data)
     Lines = InFile.readlines()
@@ -215,14 +210,14 @@ def Add18ColDataToFactTable():
     # for each line in the input file
     for line in Lines:
         # split line into columns
-        Split = line.split(" ")
+        Split = line.strip().split(" ")
         #TODO:clean data if needed
         # do some reformatting of the browser field
         # Extract browser details 
-        browser = Split[4].replace(",","")
+        Browser = Split[4].replace(",","")
 
         # create line of text to write to output file, made up of the following: Date,Time,Browser,IP,ResponseTime
-        Out = Split[0] + "," + Split[1] +  "," + Split[2] +  "," + Split[3] + "," + browser + "," + Split[5] + "," + Split[6]  + "," + Split[7]  + "," + Split[8]  + "," + Split[9] + "," + Split[10]
+        Out = Split[0] + "," + Split[1] +  "," + Split[2] +  "," + Split[3] + "," + Browser + "," + Split[7] + "," + Split[10]  + "," + Split[6]  + "," + Split[8]  + "," + Split[9] + "\n"
 
         # write line of text to output file
         OutFact2.write(Out)
@@ -234,35 +229,103 @@ def BuildFactTable():
 
     # add / append data from 18-col log files into Fact table
     Add18ColDataToFactTable()
-
+#TODO: 2.	Transform: Converting, processing, and aggregating that data into a
+#unified form that is relevant to our business analytical needs
+#Transformation: changing the type or structure
 #TODO: create  Dimension table for the IP
 
-# copy / extract all IP addresses from the Fact Tables 14 &18
+# # copy / extract all IP addresses from the Fact Tables 14 &18
+# # eventually, these will be used to create and populate
+# # a Dimension table for the IP / Location. This is just
+# # a first stage in processing to acheive this. Initially,
+# # ALL ip addresses will be copied from the Fact table 
+# # which means some of them may be duplicates / non-unique.
+# # This will be resolved in a subsequent stage
+# def extractDataFromFactTable(): 
+#     # open the fact tables (as it contains all rows of data)
+#     InFile1 = open(StagingArea + 'FactTableFor14.txt', 'r')
+    
+#     InFile2 = open(StagingArea + 'FactTableFor18.txt', 'r')
+    
+
+
+# copy / extract all IP addresses from the Fact Table
 # eventually, these will be used to create and populate
 # a Dimension table for the IP / Location. This is just
 # a first stage in processing to acheive this. Initially,
 # ALL ip addresses will be copied from the Fact table 
 # which means some of them may be duplicates / non-unique.
 # This will be resolved in a subsequent stage
-def extractDataFromFactTable(): 
-    # open the fact tables (as it contains all rows of data)
+def getIPsFromFactTable():
+    # open file to write IP data into
+    OutputFile = open(StagingArea + 'RawIPAddresses.txt', 'w')
+    # open file to write IP data into
+    # open fact table 
     InFile1 = open(StagingArea + 'FactTableFor14.txt', 'r')
-    InFile2 = open(StagingArea + 'FactTableFor18.txt', 'r')
-    writeOutputToFile(InFile1)
-    writeOutputToFile(InFile2)
+    writeOutputToFile(InFile1, OutputFile, 3)
 
+    InFile2 = open(StagingArea + 'FactTableFor18.txt', 'r')
+    writeOutputToFile(InFile2, OutputFile, 3)
+
+# copy / extract all dates from the Fact Table
+# eventually, these will be used to create and populate
+# a Dimension table for the dates. This is just
+# a first stage in processing to acheive this. Initially,
+# ALL dates will be copied from the Fact table 
+# which means some of them may be duplicates / non-unique.
+# This will be resolved in a subsequent stage
+def getDatesFromFactTable():
+    # open output file to write dates into
+    OutputFile = open(StagingArea + 'RawDates.txt', 'w')
+    InFile1 = open(StagingArea + 'FactTableFor14.txt', 'r')
+    writeOutputToFile(InFile1, OutputFile, 0)
+
+    InFile2 = open(StagingArea + 'FactTableFor18.txt', 'r')
+    writeOutputToFile(InFile2, OutputFile, 0)
+
+# copy / extract all time
+def getTimeFromFactTable():
+    # open output file to write dates into
+    TimeFile = open(StagingArea + 'Time.txt', 'w')
+    InFile1 = open(StagingArea + 'FactTableFor14.txt', 'r')
+    writeOutputToFile(InFile1, TimeFile, 1)
+
+    InFile2 = open(StagingArea + 'FactTableFor18.txt', 'r')
+    writeOutputToFile(InFile2, TimeFile, 1)
+  
+# copy / extract all time
+def getUserAgentFromFactTable():
+    # open output file to write dates into
+    OutputFile = open(StagingArea + 'UserAgent.txt', 'w')
+    InFile1 = open(StagingArea + 'FactTableFor14.txt', 'r')
+    writeOutputToFile(InFile1, OutputFile, 4 )
+
+    InFile2 = open(StagingArea + 'FactTableFor18.txt', 'r')
+    writeOutputToFile(InFile2, OutputFile, 4)
+
+ # copy / extract all referrer
+def getStatusCodeFromFactTable():
+    # open output file to write dates into
+    statusFile = open(StagingArea + 'StatusCode.txt', 'w')
+    InFile1 = open(StagingArea + 'FactTableFor14.txt', 'r')
+    writeOutputToFile(InFile1, statusFile, 5)
+
+    InFile2 = open(StagingArea + 'FactTableFor18.txt', 'r')
+    writeOutputToFile(InFile2, statusFile, 5)
+    
+
+  # copy / extract all referrer
+def getReferrerFromFactTable():
+    # open output file to write dates into
+    referrerFile = open(StagingArea + 'Referrer.txt', 'w')
+    InFile1 = open(StagingArea + 'FactTableFor18.txt', 'r')
+    writeOutputToFile(InFile1, referrerFile, 7)
 
     """
     This function reads details from an input file, extracts the desired values
     and writes the extracted information to an output file.
     """
-def writeOutputToFile(InFile):
-    # open file to write IP data into
-    ipAddressFile = open(StagingArea + 'RawIPAddresses.txt', 'w')
-    dateFile = open(StagingArea + 'RawDates.txt', 'w')
-    browserFile = open(StagingArea + 'Browser.txt', 'w')
-    browser_pattern = re.compile(r"(Mozilla|Chrome|Safari|Edge|Opera|Firefox|MSIE|Trident)/?\s*(\d+(\.\d+)*)")
-    
+def writeOutputToFile(InFile, OutputFile, Index):
     # get the IP address & write it to the file
      # read all lines from input file
     Lines = InFile.readlines()
@@ -275,132 +338,11 @@ def writeOutputToFile(InFile):
        else:
             # split the line into its parts
             Split = line.split(",")
-            IPAddr = Split[3] + "\n"
-            DateInfo = Split[0] + "\n"
-            match = browser_pattern.search(Split[4])
-            print(match)
-            if match:
-                browser, version, _ = match.groups()  # Extract groups from match object
-                browserFile.write(browser + "," + version +"\n")
-            # write IP address to output file
-            ipAddressFile.write(IPAddr)
-            dateFile.write(DateInfo)
+            value = Split[Index] + "\n"
+            # write value to output file 
+            if value!='-':
+                OutputFile.write(value)
 
-
-# define days of the week - used in routine(s) below
-Days=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-
-#TODO: LOAD 
-# create / build a dimension table for the date information
-def makeDateDimension():
-    # open file that contains dates extracted from the fact table, subsequently made unique
-    InDateFile = open(StagingArea + 'UniqueDates.txt', 'r')   
-
-    # open output file to write date dimension data into
-    OutputDateFile = open(StarSchema + 'DimDateTable.txt', 'w')
-
-    # write a header row into the output file for constituent parts of the date
-    with OutputDateFile as file:
-       file.write("Date,Year,Month,Day,DayofWeek\n")
-
-    # get lines of data from input file (where each 'line' will be a Date string)
-    Lines = InDateFile.readlines()
-    
-    # for each line / date
-    for line in Lines:
-        # remove any new line that may be present
-        line=line.replace("\n","")
-
-        print(line) # remove?
-
-        # if the line isn't empty
-        if (len(line) > 0):  
-            # try the following
-            try:
-                # get the date from the line of text, e.g., year, month, day
-                date = datetime.strptime(line,"%Y-%m-%d").date()
-
-                # get the weekday as a string, e.g., 'Monday', 'Tuesday', etc.
-                weekday = Days[date.weekday()]
-
-                # create line of text to write to output file with the different components of the date
-                # each line / row will have the original date string [key], year, month, day, weekday
-                out = str(date) + "," + str(date.year) + "," + str(date.month) + "," + str(date.day) + "," + weekday + "\n"
-
-                # write / append the date information to the output file            
-                with open(StarSchema + 'DimDateTable.txt', 'a') as file:
-                    file.write(out)
-            except:
-                print("Error with Date") # report error in case of exception
-
-# create / build a dimension table for the 'location' information derived from IP addresses
-def makeLocationDimension():
-    # define path to the file that will store the location dimension
-    DimTablename = StarSchema + 'DimIPLoc.txt'
-
-    # TODO:is the following needed?
-    # try:
-    #    file_stats = os.stat(DimTablename)
-    #
-    #    if (file_stats.st_size >2):
-    #       print("Dim IP Table Exists")
-    #       return
-    # except:
-    #    print("Dim IP Table does not exist, creating one")    
-    
-    # open file in staging area that contains the uniquie IP addresses extracted from the Fact table
-    InFile = open(StagingArea + 'UniqueIPAddresses.txt', 'r')
-    #    OutFile=open(StarSchema + 'DimIPLoc.txt', 'w') <- needed?
-
-    # write a header row into the output file for constituent parts of the location
-    with open(StarSchema + 'DimIPLoc.txt', 'w') as file:
-               file.write("IP, country_code, country_name, city, lat, long\n")
-    
-    # read in lines / IP addresses from file
-    Lines = InFile.readlines()
-
-    # for each line / IP address in the file
-    for line in Lines:
-        # remove any new line from it
-        line = line.replace("\n","")
-
-        # if the line isn't empty
-        if (len(line) > 0):
-            # define URL of API to send the IP address to, in return for detailed location information
-            request_url = 'https://geolocation-db.com/jsonp/' + line
-            print("request_url"+request_url)
-            # Send request and decode the result
-            try:
-                response = requests.get(request_url)
-                resultResponse = response.content.decode()
-            except:
-                print ("Error response from geolocation API: " + resultResponse)
-            
-            # process the response
-            try:
-                # Clean the returned string so it just contains the location data for the IP address
-                resultJson = resultResponse.split("(")[1].strip(")")
-                # Convert the location data into a dictionary so that individual fields can be extracted
-                result  = json.loads(resultJson)
-              
-                # create line of text to write to output file representing the location Dimension
-                # each line / row will have the original IP address [key], country code, country name, city, lat, long
-                country_code = result["country_code"]
-                country =  result["country_name"]
-                city = result["city"]
-                latitude = str(result["latitude"])
-                longitude = str(result["longitude"])
-                state = result["state"]
-                postcode = str(result["postal"])
-                outputLine = line + "," + country_code + "," +country + "," + city+ "," + latitude + "," + longitude + "\n"
-                insert_ip_details(line,country,city, state, postcode, latitude, longitude)    
-                # write / append the line to the output file
-                with open(StarSchema + 'DimIPLoc.txt', 'a') as file:
-                    file.write(outputLine)
-            except json.JSONDecodeError as e:
-                print("JSON decoding error:", e)
-            except Exception as e:
-                print ("An error occurred:", e)
 
 # the DAG - required for Apache Airflow
 dag = DAG(                                                     
@@ -419,13 +361,46 @@ task_CopyLogFilesToStagingArea = PythonOperator(
 )
 
 # A python operator to copy / extract IP address data from the Fact table
-task_extractFromFactTable = PythonOperator(
-    task_id="task_extractFromFactTable",
-    python_callable=extractDataFromFactTable,
+task_getIPsFromFactTable = PythonOperator(
+    task_id="task_getIPsFromFactTable",
+    python_callable=getIPsFromFactTable,
     dag=dag,
 )
 
- 
+# A python operator to copy / extract date information from the Fact table
+task_getDatesFromFactTable = PythonOperator(
+    task_id="task_getDatesFromFactTable",
+    python_callable=getDatesFromFactTable,
+    dag=dag,
+)
+
+# A python operator to copy / extract browser data from the Fact table
+task_getUserAgentFromFactTable = PythonOperator(
+    task_id="task_getUserAgentFromFactTable",
+    python_callable=getUserAgentFromFactTable,
+    dag=dag,
+)
+
+# A python operator to copy / extract referrer information from the Fact table
+task_getReferrerFromFactTable = PythonOperator(
+    task_id="task_getReferrerFromFactTable",
+    python_callable=getReferrerFromFactTable,
+    dag=dag,
+)
+
+# A python operator to copy / extract status code information from the Fact table
+task_getStatusCodeFromFactTable = PythonOperator(
+    task_id="task_getStatusCodeFromFactTable",
+    python_callable=getStatusCodeFromFactTable,
+    dag=dag,
+)
+# A python operator to copy / extract status code information from the Fact table
+task_getTimeFromFactTable = PythonOperator(
+    task_id="task_getTimeFromFactTable",
+    python_callable=getTimeFromFactTable,
+    dag=dag,
+)
+
 # # A python operator to build the Location Dimension based on IP addresses
 task_makeLocationDimension = PythonOperator(
     task_id="task_makeLocationDimension",
@@ -447,19 +422,40 @@ task_makeDateDimension = PythonOperator(
    dag=dag,
 )
 
+# A python operator to build the Date Dimension based on time information
+task_makeTimeDimension = PythonOperator(
+   task_id="task_makeTimeDimension",
+   python_callable=makeTimeDimension, 
+   dag=dag,
+)
+
+
+# A python operator to build the Date Dimension based on date information
+task_makeUserAgentDimension = PythonOperator(
+   task_id="task_makeUserAgentDimension",
+   python_callable=makeUserAgentDimension, 
+   dag=dag,
+)
+
 # A bash operator that will transform the complete list of original IP addresses into
 # a file containing only unique IP addresses
 task_makeUniqueIPs = BashOperator(
     task_id="task_makeUniqueIPs",
-    bash_command=uniqIPsCommand,
+    bash_command=uniqueIPsCommand,
     dag=dag,
 )
 
+task_makeUniqueUserAgent=  BashOperator(
+    task_id="task_makeUniqueUserAgent",
+    bash_command=uniqueUserAgentCommand,
+    dag=dag,
+)
+ 
 # A bash operator that will transform the complete list of original dates into
 # a file containing only unique dates
 task_makeUniqueDates = BashOperator(
     task_id="task_makeUniqueDates",
-    bash_command=uniqDatesCommand,
+    bash_command=uniqueDatesCommand,
     dag=dag,
 )
 
@@ -499,9 +495,24 @@ task_makeUniqueDates = BashOperator(
  
 #task_makeLocationDimension >> task_copyFactTable
 #task_makeLocationDimension >> task_copyFactTable
-task_makeUniqueDates >> task_makeDateDimension
-task_makeUniqueIPs >> task_makeLocationDimension
-#task_extractFromFactTable >> task_makeUniqueDates
-task_extractFromFactTable >>  task_makeUniqueIPs
-#task_BuildFactTable >> task_extractFromFactTable
-#task_CopyLogFilesToStagingArea >> task_BuildFactTable
+
+#task_makeUserAgentDimension >> task_makeUniqueUserAgent
+#task_makeUniqueDates >> task_makeDateDimension
+#task_makeUniqueIPs >> task_makeLocationDimension
+
+
+#task_getUserAgentFromFactTable >> task_makeUserAgentDimension
+#task_getTimeFromFactTable >> task_makeTimeDimension 
+
+#task_getDatesFromFactTable >> task_makeUniqueDates
+#task_getIPsFromFactTable >> task_makeUniqueIPs
+
+#parallel
+task_BuildFactTable >>  task_getStatusCodeFromFactTable
+task_BuildFactTable >>  task_getReferrerFromFactTable
+task_BuildFactTable >>  task_getUserAgentFromFactTable >> task_makeUserAgentDimension >> task_makeUniqueUserAgent
+task_BuildFactTable >>  task_getTimeFromFactTable >> task_makeTimeDimension
+task_BuildFactTable >>  task_getDatesFromFactTable  >> task_makeUniqueDates >> task_makeDateDimension
+task_BuildFactTable >> task_getIPsFromFactTable >> task_makeUniqueIPs >> task_makeLocationDimension
+
+task_CopyLogFilesToStagingArea >> task_BuildFactTable
