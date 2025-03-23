@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 from user_agents import parse 
 import openpyxl
-
+from write_to_excel import writeToExcel
 
 # define (local) folders where files will be found / copied / staged / written
 WorkingDirectory = "/opt/airflow/dags/w3c"
@@ -21,19 +21,11 @@ Days=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 #TODO: LOAD 
 # create / build a dimension table for the date information
 def makeDateDimension():
-    print("dddd")
     # open file that contains dates extracted from the fact table, subsequently made unique
     InDateFile = open(StagingArea + 'UniqueDates.txt', 'r')   
 
-    # open output excel to write date dimension data into
-    OutputExcelFile = StarSchema+ "FinalOutput.xlsx"  # Excel output file
-    # Create a new Excel workbook and sheet 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "DDateTable" 
- 
-    
-    ws.append(["Date", "Year", "Month", "Day", "DayofWeek", "Quarter"])
+    data=[]
+    data.append(["Date", "Year", "Month", "Day", "DayofWeek", "Quarter"])
     
     # write a header row into the output file for constituent parts of the date
     with open(StarSchema + 'DimDateTable.txt', 'w') as file:
@@ -66,7 +58,7 @@ def makeDateDimension():
                 
                 #insert_date_details(date,year,month,day,weekday,quarter)    
                 # Append row to data list
-                ws.append([date, year, month, day, weekday, quarter])
+                data.append([date, year, month, day, weekday, quarter])
                 
                 # write / append the date information to the output file     
                        
@@ -75,21 +67,21 @@ def makeDateDimension():
                     
             except Exception as e:
                 print(f"Error with Date: {e}") # report error in case of exception
-                # Create DataFrame
-   # df = pd.DataFrame(data, columns=["Date", "Year", "Month", "Day", "DayofWeek", "Quarter"])
 
-    # Save to Excel
-    #df.to_excel(OutputExcelFile, index=False, engine="openpyxl")
-    wb.save(OutputExcelFile)
+    writeToExcel("DateDim", data)
+
 
     
-# create / build a dimension table for the 'time' information derived from user agent
+# create / build a dimension table for the 'time' information derived from time
 def makeTimeDimension(): 
     # open file in staging area that contains the time extracted from the Fact table
     InTimeFile = open(StagingArea + 'Time.txt', 'r')   
     # open output file to write date dimension data into
     OutputDateFile = open(StarSchema + 'DimTimeTable.txt', 'w')
-
+ 
+    data=[] 
+    data.append(["Time","Hour","Minute","Second"])
+ 
     # write a header row into the output file for constituent parts of the date
     with OutputDateFile as file:
        file.write("Time,Hour,Minute,Second\n")
@@ -115,30 +107,28 @@ def makeTimeDimension():
                 second = str(time.second) 
                 out= f"{time},{hour},{minute},{second}\n"
                  #insert_time_details(time,hour,minute,second)    
+                data.append([time,hour,minute,second])
 
                 # write / append the date information to the output file            
                 with open(StarSchema + 'DimTimeTable.txt', 'a') as file:
                     file.write(out)
             except Exception as e:
                 print(f"An error occurred: {e}") # report error in case of exception
-          
+    writeToExcel("TimeDim",data)      
 
 # create / build a dimension table for the 'user agent' information derived from user agent
 def makeUserAgentDimension(): 
     # open file in staging area that contains the unique IP addresses extracted from the Fact table
     InFile = open(StagingArea + 'UserAgent.txt', 'r')
- 
-    # open output excel to write date dimension time into
-    OutputExcelFile = StarSchema+ "Excel/DateDim.xlsx"  # Excel output file
-    # Create a new Excel workbook and sheet 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "DTimeTable" 
-   
+
+    data=[]
+    data.append(["Browser","Version","OS","Device_type","Language","Rendering Engine"])
+    
     # write a header row into the output file for constituent parts of agent
     with open(StarSchema + 'DimUserAgentTable.txt', 'w') as file:
                file.write("Browser,Version,OS,Device_type,Language,Rendering Engine\n")
     
+
     # read in lines / user agent from file
     Lines = InFile.readlines()
 
@@ -154,20 +144,27 @@ def makeUserAgentDimension():
              device_type  ="Mobile" if user_agent.is_mobile else "Tablet" if user_agent.is_tablet else "PC"
              engine="Trident" if "MSIE" in line else "Unknown"
              outputLine = browser + "," + version_string + "," +os + "," + device_type+ "," + engine + "\n"
+             data.append([browser,version_string,os,device_type,engine])
              #insert_user_agent_details(browser,version_string,os,device_type,engine)    
                 # write / append the line to the output file
              with open(StarSchema + 'DimUserAgentTable.txt', 'a') as file:
                     file.write(outputLine)
                
-
+    # Save to Excel
+    writeToExcel("AgentDim", data)
 
 # create / build a dimension table for the 'location' information derived from IP addresses
 def makeLocationDimension():
+    
     # define path to the file that will store the location dimension
     #DimTablename = StarSchema + 'DimIPLoc.txt'
     # open file in staging area that contains the unique IP addresses extracted from the Fact table
     InFile = open(StagingArea + 'UniqueIPAddresses.txt', 'r')
  
+    data=[]
+    data.append(["IP","country_code","country_name","city","state","postcode","latitude","longitude"])
+    
+
     # write a header row into the output file for constituent parts of the location
     with open(StarSchema + 'DimIPLoc.txt', 'w') as file:
                file.write("IP, country_code, country_name, city, state, postcode, lat, long\n")
@@ -207,6 +204,7 @@ def makeLocationDimension():
                 postcode = str(result["postal"])
                 print(result,country_code,country,city, longitude,latitude,state,postcode)
                 outputLine = f"{line},{country_code},{country},{city},{state},{postcode},{latitude},{longitude}\n"
+                data.append([line,country_code, country,city, state, postcode, latitude, longitude])
 
                 #insert_ip_details(line,country,city, state, postcode, latitude, longitude)    
                 # write / append the line to the output file
@@ -216,5 +214,61 @@ def makeLocationDimension():
                 print("JSON decoding error:", e)
             except Exception as e:
                 print ("An error occurred:", e)
-         
-         
+        # Save to Excel
+    writeToExcel("LocationDim", data)  
+    
+    
+def makeFactTableDim(): 
+    # write a header row into the output file for constituent parts of the location
+    with open(StarSchema + 'FactTable.txt', 'w') as file:
+               file.write("Date,Time,Uri-stem,IP,Browser,Status,ResponseTime,Cookie,Referrer,Sc-bytes,Cs-bytes\n")
+    
+    data=[]
+    data.append(["Date","Time","Uri-stem","IP","Browser","Status","ResponseTime","Cookie", "Referrer", "Sc-bytes","Cs-bytes" ])
+    makeFactTableDim14()
+    makeFactTableDim18() 
+    
+def makeFactTableDim14():    
+    InFile = open(StagingArea + 'FactTableFor14.txt', 'r')
+    
+    data=[] 
+     
+    Lines = InFile.readlines()
+    for line in Lines:
+        # remove any new line from it
+        line = line.strip()
+        if line: # automatically checks if the string is non-empty 
+            outputLine = f"{line}\n"
+            split = line.strip().split(",")
+            data.append(split)
+
+    #insert_ip_details(line,country,city, state, postcode, latitude, longitude)    
+    # write / append the line to the output file
+    with open(StarSchema + 'FactTable.txt', 'a') as file:
+        file.write(outputLine)
+    # Save to Excel
+    writeToExcel("FactTable", data)  
+        
+def makeFactTableDim18():    
+    InFile = open(StagingArea + 'FactTableFor18.txt', 'r')
+    
+    data=[] 
+     
+    Lines = InFile.readlines()
+    for line in Lines:
+        # remove any new line from it
+        line = line.strip()
+        if line: # automatically checks if the string is non-empty 
+            outputLine = f"{line}\n"
+            split = line.strip().split(",")
+            data.append(split)
+
+    #insert_ip_details(line,country,city, state, postcode, latitude, longitude)    
+    # write / append the line to the output file
+    with open(StarSchema + 'FactTable.txt', 'a') as file:
+        file.write(outputLine)
+    # Save to Excel
+    writeToExcel("FactTable", data)  
+        
+        
+        

@@ -5,7 +5,7 @@ from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 
 import logging  # Import the logging module
-from make_dimension import makeDateDimension, makeTimeDimension, makeUserAgentDimension, makeLocationDimension
+from make_dimension import makeDateDimension, makeTimeDimension, makeUserAgentDimension, makeLocationDimension,makeFactTableDim
 
 # define (local) folders where files will be found / copied / staged / written
 WorkingDirectory = "/opt/airflow/dags/w3c"
@@ -22,7 +22,7 @@ uniqueDatesCommand = "sort -u " + StagingArea + "RawDates.txt > " + StagingArea 
 
 uniqueUserAgentCommand = "sort -u " + StarSchema + "DimUserAgentTable.txt > " + StarSchema + "DimUniqueUserAgentTable.txt"
 # Another BASH command, this time to copy the Fact Table that is produced from the Staging area to the resultant folder
-#copyFactTableCommand = "cp " + StagingArea + "FactTable.txt " + StarSchema + "FactTable.txt"
+copyFactTableCommand = "cp " + StagingArea + "FactTable.txt " + StarSchema + "FactTable.txt"
 
 # prior to any processing, make sure the expected directory structure is in place for files
 try:   
@@ -461,12 +461,12 @@ task_makeUniqueDates = BashOperator(
 
 # a bash operator that will copy the Fact table from its temporary location in the 
 # Staging Area (where it is used during the creation of Dimension tables) into the Star Schema location
-# task_copyFactTable = BashOperator(
-#     task_id="task_copyFactTable",
-#     bash_command=copyFactTableCommand,
-# #     bash_command="cp /home/airflow/gcs/data/Staging/OutFact1.txt /home/airflow/gcs/data/StarSchema/OutFact1.txt",
-#     dag=dag,
-# )
+task_makeFactTableDim = PythonOperator(
+     task_id="task_makeFactTableDim",
+     python_callable=makeFactTableDim,
+ #     bash_command="cp /home/airflow/gcs/data/Staging/OutFact1.txt /home/airflow/gcs/data/StarSchema/OutFact1.txt",
+     dag=dag,
+)
  
 # usually, you can set up your ETL pipeline as follows, where each task follows on from the previous, one after another:
 # task1 >> task2 >> task3  
@@ -508,6 +508,7 @@ task_makeUniqueDates = BashOperator(
 #task_getIPsFromFactTable >> task_makeUniqueIPs
 
 #parallel
+task_BuildFactTable >> task_makeFactTableDim
 task_BuildFactTable >>  task_getStatusCodeFromFactTable
 task_BuildFactTable >>  task_getReferrerFromFactTable
 task_BuildFactTable >>  task_getUserAgentFromFactTable >> task_makeUserAgentDimension >> task_makeUniqueUserAgent
